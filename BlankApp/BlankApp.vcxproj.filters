@@ -8,12 +8,10 @@
   </ItemGroup>
   <ItemGroup>
     <Midl Include="App.idl" />
-    <Midl Include="MainPage.idl" />
+    <Midl Include="MainWindow.idl" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp" />
-    <ClCompile Include="App.cpp" />
-    <ClCompile Include="MainPage.cpp" />
     <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -43,18 +41,17 @@
     </Image>
   </ItemGroup>
   <ItemGroup>
-    <AppxManifest Include="Package.appxmanifest" />
-  </ItemGroup>
-  <ItemGroup>
     <Filter Include="Assets">
-      <UniqueIdentifier>{e48dc53e-40b1-40cb-970a-f89935452892}</UniqueIdentifier>
+      <UniqueIdentifier>{a399a92f-877c-4267-8af4-8d46cae6ae98}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <None Include="PropertySheet.props" />
-    <None Include="packages.config" />
+    <Text Include="readme.txt" />
   </ItemGroup>
   <ItemGroup>
-    <Text Include="readme.txt" />
+    <Manifest Include="app.manifest" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
   </ItemGroup>
 </Project>

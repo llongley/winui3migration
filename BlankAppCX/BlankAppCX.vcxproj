@@ -1,16 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="packages\Microsoft.WindowsAppSDK.1.0.0\build\native\Microsoft.WindowsAppSDK.props" Condition="Exists('packages\Microsoft.WindowsAppSDK.1.0.0\build\native\Microsoft.WindowsAppSDK.props')" />
+  <Import Project="packages\Microsoft.Windows.SDK.BuildTools.10.0.22000.194\build\Microsoft.Windows.SDK.BuildTools.props" Condition="Exists('packages\Microsoft.Windows.SDK.BuildTools.10.0.22000.194\build\Microsoft.Windows.SDK.BuildTools.props')" />
   <PropertyGroup Label="Globals">
     <ProjectGuid>{8eaddfc3-0a4e-46af-9c81-00e2035e286d}</ProjectGuid>
     <RootNamespace>BlankAppCX</RootNamespace>
     <DefaultLanguage>en-US</DefaultLanguage>
     <MinimumVisualStudioVersion>14.0</MinimumVisualStudioVersion>
-    <AppContainerApplication>true</AppContainerApplication>
+    <AppContainerApplication>false</AppContainerApplication>
+    <AppxPackage>true</AppxPackage>
     <ApplicationType>Windows Store</ApplicationType>
     <WindowsTargetPlatformVersion Condition=" '$(WindowsTargetPlatformVersion)' == '' ">10.0.22000.0</WindowsTargetPlatformVersion>
     <WindowsTargetPlatformMinVersion>10.0.17763.0</WindowsTargetPlatformMinVersion>
     <ApplicationTypeRevision>10.0</ApplicationTypeRevision>
     <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+    <UseWinUI>true</UseWinUI>
+    <EnablePreviewMsixTooling>true</EnablePreviewMsixTooling>
+    <DesktopCompatible>true</DesktopCompatible>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <ItemGroup Label="ProjectConfigurations">
@@ -201,6 +207,9 @@
       <SubType>Designer</SubType>
     </AppxManifest>
   </ItemGroup>
+  <ItemGroup>
+    <Manifest Include="app.manifest" />
+  </ItemGroup>
 
   <ItemGroup>
     <Image Include="Assets\LockScreenLogo.scale-200.png" />
@@ -211,7 +220,13 @@
     <Image Include="Assets\StoreLogo.png" />
     <Image Include="Assets\Wide310x150Logo.scale-200.png" />
   </ItemGroup>
-
+  <!-- Defining the "Msix" ProjectCapability here allows the Single-project MSIX Packaging
+       Tools extension to be activated for this project even if the Windows App SDK Nuget
+       package has not yet been restored -->
+       <ItemGroup Condition="'$(DisableMsixProjectCapabilityAddedByProject)'!='true' and '$(EnablePreviewMsixTooling)'=='true'">
+        <ProjectCapability Include="Msix" />
+      </ItemGroup>
+    
   <ItemGroup>
     <ClCompile Include="App.xaml.cpp">
         <DependentUpon>App.xaml</DependentUpon>
@@ -232,9 +247,26 @@
     </ClCompile>
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="packages.config" />
+  </ItemGroup>
+
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 
   <ImportGroup Label="ExtensionTargets">
+    <Import Project="packages\Microsoft.Windows.SDK.BuildTools.10.0.22000.194\build\Microsoft.Windows.SDK.BuildTools.targets" Condition="Exists('packages\Microsoft.Windows.SDK.BuildTools.10.0.22000.194\build\Microsoft.Windows.SDK.BuildTools.targets')" />
+    <Import Project="packages\Microsoft.WindowsAppSDK.1.0.0\build\native\Microsoft.WindowsAppSDK.targets" Condition="Exists('packages\Microsoft.WindowsAppSDK.1.0.0\build\native\Microsoft.WindowsAppSDK.targets')" />
+    <Import Project="packages\Microsoft.Windows.ImplementationLibrary.1.0.211019.2\build\native\Microsoft.Windows.ImplementationLibrary.targets" Condition="Exists('packages\Microsoft.Windows.ImplementationLibrary.1.0.211019.2\build\native\Microsoft.Windows.ImplementationLibrary.targets')" />
   </ImportGroup>
+  <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
+    <PropertyGroup>
+      <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
+    </PropertyGroup>
+    <Error Condition="!Exists('packages\Microsoft.Windows.SDK.BuildTools.10.0.22000.194\build\Microsoft.Windows.SDK.BuildTools.props')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.Windows.SDK.BuildTools.10.0.22000.194\build\Microsoft.Windows.SDK.BuildTools.props'))" />
+    <Error Condition="!Exists('packages\Microsoft.Windows.SDK.BuildTools.10.0.22000.194\build\Microsoft.Windows.SDK.BuildTools.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.Windows.SDK.BuildTools.10.0.22000.194\build\Microsoft.Windows.SDK.BuildTools.targets'))" />
+    <Error Condition="!Exists('packages\Microsoft.WindowsAppSDK.1.0.0\build\native\Microsoft.WindowsAppSDK.props')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.WindowsAppSDK.1.0.0\build\native\Microsoft.WindowsAppSDK.props'))" />
+    <Error Condition="!Exists('packages\Microsoft.WindowsAppSDK.1.0.0\build\native\Microsoft.WindowsAppSDK.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.WindowsAppSDK.1.0.0\build\native\Microsoft.WindowsAppSDK.targets'))" />
+    <Error Condition="!Exists('packages\Microsoft.Windows.ImplementationLibrary.1.0.211019.2\build\native\Microsoft.Windows.ImplementationLibrary.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.Windows.ImplementationLibrary.1.0.211019.2\build\native\Microsoft.Windows.ImplementationLibrary.targets'))" />
+  </Target>
 
 </Project>

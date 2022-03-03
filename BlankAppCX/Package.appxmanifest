@@ -4,14 +4,13 @@
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
-  IgnorableNamespaces="uap mp">
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap mp rescap">
 
   <Identity
-    Name="875a0dec-3e67-4f8c-b296-ea22780c6bf5"
+    Name="84C7F553-E862-4D7C-837D-5E3F5DC90319"
     Publisher="CN=jevansa"
     Version="1.0.0.0" />
-
-  <mp:PhoneIdentity PhoneProductId="875a0dec-3e67-4f8c-b296-ea22780c6bf5" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
     <DisplayName>BlankAppCX</DisplayName>
@@ -20,7 +19,8 @@
   </Properties>
 
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.0.0" MaxVersionTested="10.0.0.0" />
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
   </Dependencies>
 
   <Resources>
@@ -30,7 +30,7 @@
   <Applications>
     <Application Id="App"
       Executable="$targetnametoken$.exe"
-      EntryPoint="BlankAppCX.App">
+      EntryPoint="$targetentrypoint$">
       <uap:VisualElements
         DisplayName="BlankAppCX"
         Square150x150Logo="Assets\Square150x150Logo.png"
@@ -44,6 +44,6 @@
   </Applications>
 
   <Capabilities>
-    <Capability Name="internetClient" />
+    <rescap:Capability Name="runFullTrust" />
   </Capabilities>
 </Package>
