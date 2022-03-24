@@ -7,15 +7,15 @@
   IgnorableNamespaces="uap mp">
 
   <Identity
-    Name="875a0dec-3e67-4f8c-b296-ea22780c6bf5"
-    Publisher="CN=jevansa"
+    Name="734d802b-b86c-4232-8ab7-c506e1ea9930"
+    Publisher="CN=llongley"
     Version="1.0.0.0" />
 
-  <mp:PhoneIdentity PhoneProductId="875a0dec-3e67-4f8c-b296-ea22780c6bf5" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
+  <mp:PhoneIdentity PhoneProductId="734d802b-b86c-4232-8ab7-c506e1ea9930" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
     <DisplayName>BlankAppCX</DisplayName>
-    <PublisherDisplayName>jevansa</PublisherDisplayName>
+    <PublisherDisplayName>llongley</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 

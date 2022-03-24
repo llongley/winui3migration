@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{8eaddfc3-0a4e-46af-9c81-00e2035e286d}</ProjectGuid>
+    <ProjectGuid>{0f5d29f4-840a-47a7-9d8a-a0a6ad78ed48}</ProjectGuid>
     <RootNamespace>BlankAppCX</RootNamespace>
     <DefaultLanguage>en-US</DefaultLanguage>
     <MinimumVisualStudioVersion>14.0</MinimumVisualStudioVersion>
