@@ -19,81 +19,24 @@ if ($ProjectRoot -ine $ConvertedProjectRoot)
     }
 }
 
-# Rename Windows.UI.Xaml to Microsoft.UI.Xaml, except for Windows.UI.Xaml.Interop.TypeKind and TypeName,
-# which remain in the WUX namespace tree.
+# Modify solution files to remove the ARM configuration.
 
-Write-Host "Renaming Windows.UI.Xaml to Microsoft.UI.Xaml..."
+Write-Host "Updating solution files to support WinAppSDK..."
 
-foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.cpp") + (Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.h") + (Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.cs") + (Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.idl")))
+foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.sln")))
 {
     [System.IO.FileSystemInfo]$file = $file
     [string]$fileContents = [System.IO.File]::ReadAllText($file.FullName)
-
-    $fileContents = $fileContents -replace "Windows.UI.Xaml", "Microsoft.UI.Xaml"
+    $originalFileContents = $fileContents
     
-    if ($file.Extension -eq ".cpp" -or $file.Extension -eq ".h")
+    $fileContents = $fileContents -ireplace "\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}\.\w+\|ARM\.\w+(?:\.\w+)?\s*=\s*\w+\|ARM[\s\n\r]*", ""
+    $fileContents = $fileContents -ireplace "\w+?\|ARM = \w+?\|ARM[\s\n\r]*", ""
+    $fileContents = $fileContents -replace "ARM64", "arm64"
+    
+    if ($fileContents -ne $originalFileContents)
     {
-        $fileContents = $fileContents -replace "Windows::UI::Xaml", "Microsoft::UI::Xaml"
-        $fileContents = $fileContents -replace "Microsoft::UI::Xaml::Interop::TypeKind", "Windows::UI::Xaml::Interop::TypeKind"
-        $fileContents = $fileContents -replace "Microsoft::UI::Xaml::Interop::TypeName", "Windows::UI::Xaml::Interop::TypeName"
-        $fileContents = $fileContents -replace "(?:\w+::)*LaunchActivatedEventArgs", "Microsoft::UI::Xaml::LaunchActivatedEventArgs"
+        [System.IO.File]::WriteAllText($file.FullName, $fileContents, [System.Text.Encoding]::UTF8)
     }
-    else
-    {
-        $fileContents = $fileContents -replace "Microsoft.UI.Xaml.Interop.TypeKind", "Windows.UI.Xaml.Interop.TypeKind"
-        $fileContents = $fileContents -replace "Microsoft.UI.Xaml.Interop.TypeName", "Windows.UI.Xaml.Interop.TypeName"
-        $fileContents = $fileContents -replace "(?:\w+\.)*LaunchActivatedEventArgs", "Microsoft.UI.Xaml.LaunchActivatedEventArgs"
-    }
-
-    # We also need to remove some APIs that don't exist in WinAppSDK.
-    if ($file.FullName.Contains("App."))
-    {
-        if ($file.Extension -eq ".h")
-        {
-            $fileContents = $fileContents -replace "\s*void[^;]*?SuspendingEventArgs[^;]*?;", ""
-            $fileContents = $fileContents -replace "\s*void[^;]*?NavigationFailedEventArgs[^;]*?;", ""
-            
-            $isWinRT = $fileContents -ilike "*winrt*"
-
-            # Add the window reference.
-            if ($isWinRT)
-            {
-                $fileContents = $fileContents -ireplace "((?<classname>\w+)\s*:\s+\k<classname>T<\k<classname>>[^ ]*?( *)[^ ]*?\{(?>\{(?<c>)|[^{}]+|\}(?<-c>))*(?(c)(?!)))\}", "`$1$([Environment]::NewLine)`$2private:$([Environment]::NewLine)`$2    winrt::Microsoft::UI::Xaml::Window m_window{ nullptr };$([Environment]::NewLine)`$2}"
-            }
-            else # C++/CX
-            {
-                $fileContents = $fileContents -ireplace "(ref.*class[^{]*?( *)\{(?>\{(?<c>)|[^{}]+|\}(?<-c>))*(?(c)(?!)))\}", "`$1$([Environment]::NewLine)`$2private:$([Environment]::NewLine)`$2    winrt::Microsoft::UI::Xaml::Window m_window{ nullptr };$([Environment]::NewLine)`$2}"
-            }
-        }
-        else
-        {
-            $isWinRT = $fileContents -ilike "*winrt*"
-            
-            # Add the window assignment and activation.
-            if ($isWinRT)
-            {
-                $windowCreationRegex = "`$2    m_window = winrt::Microsoft::UI::Xaml::Window();$([System.Environment]::NewLine)`$2    m_window.Activate();$([System.Environment]::NewLine)"
-            }
-            else # C++/CX
-            {
-                $windowCreationRegex = "`$2    m_window = ref new Microsoft::UI::Xaml::Window();$([System.Environment]::NewLine)`$2    m_window->Activate();$([System.Environment]::NewLine)"
-            }
-
-            # This complex regex matches comments prior to the methods, plus anything in the braces after the method names.
-            $fileContents = $fileContents -replace "\s*(?:\/\/.*?\s*)*.*void.*?SuspendingEventArgs[^\{]*\{(?>\{(?<c>)|[^{}]+|\}(?<-c>))*(?(c)(?!))\}", ""
-            $fileContents = $fileContents -replace "\s*(?:\/\/.*?\s*)*.*void.*?NavigationFailedEventArgs[^\{]*\{(?>\{(?<c>)|[^{}]+|\}(?<-c>))*(?(c)(?!))\}", ""
-            $fileContents = $fileContents -replace "(\s*(?:\/\/.*?\s*)*.*void.*?::OnLaunched[^\{]*?( *))\{(?>\{(?<c>)|[^{}]+|\}(?<-c>))*(?(c)(?!))\}", "`$1`$2{$([System.Environment]::NewLine)$windowCreationRegex`$2}"
-        }
-
-        $fileContents = $fileContents -replace "\s*(?:this\.)?Suspending\s*\+=\s*[^;]*;"
-
-        if ($file.Extension -eq ".cpp")
-        {
-            $fileContents = $fileContents -replace "\s*Suspending\(.*\)\s*;"
-        }
-    }
-
-    [System.IO.File]::WriteAllText($file.FullName, $fileContents, [System.Text.Encoding]::UTF8)
 }
 
 # Modify project files to support WinAppSDK instead of UWP.
@@ -436,20 +379,85 @@ foreach ($packagesConfigFile in $packagesConfigFilesNeedingUpdate)
     }
 }
 
-# Modify solution files to remove the ARM configuration.
+# Rename Windows.UI.Xaml to Microsoft.UI.Xaml, except for Windows.UI.Xaml.Interop.TypeKind and TypeName,
+# which remain in the WUX namespace tree.
 
-Write-Host "Updating solution files to support WinAppSDK..."
+Write-Host "Renaming Windows.UI.Xaml to Microsoft.UI.Xaml..."
 
-foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.sln")))
+foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.cpp") + (Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.h") + (Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.cs") + (Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.idl")))
 {
     [System.IO.FileSystemInfo]$file = $file
     [string]$fileContents = [System.IO.File]::ReadAllText($file.FullName)
+
+    $fileContents = $fileContents -replace "Windows.UI.Xaml", "Microsoft.UI.Xaml"
+    $originalFileContents = $fileContents
     
-    $fileContents = $fileContents -ireplace "\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}\.\w+\|ARM\.\w+(?:\.\w+)?\s*=\s*\w+\|ARM[\s\n\r]*", ""
-    $fileContents = $fileContents -ireplace "\w+?\|ARM = \w+?\|ARM[\s\n\r]*", ""
-    $fileContents = $fileContents -replace "ARM64", "arm64"
-    
-    [System.IO.File]::WriteAllText($file.FullName, $fileContents, [System.Text.Encoding]::UTF8)
+    if ($file.Extension -eq ".cpp" -or $file.Extension -eq ".h")
+    {
+        $fileContents = $fileContents -replace "Windows::UI::Xaml", "Microsoft::UI::Xaml"
+        $fileContents = $fileContents -replace "Microsoft::UI::Xaml::Interop::TypeKind", "Windows::UI::Xaml::Interop::TypeKind"
+        $fileContents = $fileContents -replace "Microsoft::UI::Xaml::Interop::TypeName", "Windows::UI::Xaml::Interop::TypeName"
+        $fileContents = $fileContents -replace "(?:\w+::)*LaunchActivatedEventArgs", "Microsoft::UI::Xaml::LaunchActivatedEventArgs"
+    }
+    else
+    {
+        $fileContents = $fileContents -replace "Microsoft.UI.Xaml.Interop.TypeKind", "Windows.UI.Xaml.Interop.TypeKind"
+        $fileContents = $fileContents -replace "Microsoft.UI.Xaml.Interop.TypeName", "Windows.UI.Xaml.Interop.TypeName"
+        $fileContents = $fileContents -replace "(?:\w+\.)*LaunchActivatedEventArgs", "Microsoft.UI.Xaml.LaunchActivatedEventArgs"
+    }
+
+    # We also need to remove some APIs that don't exist in WinAppSDK.
+    if ($file.FullName.Contains("App."))
+    {
+        if ($file.Extension -eq ".h")
+        {
+            $fileContents = $fileContents -replace "\s*void[^;]*?SuspendingEventArgs[^;]*?;", ""
+            $fileContents = $fileContents -replace "\s*void[^;]*?NavigationFailedEventArgs[^;]*?;", ""
+            
+            $isWinRT = $fileContents -ilike "*winrt*"
+
+            # Add the window reference.
+            if ($isWinRT)
+            {
+                $fileContents = $fileContents -ireplace "((?<classname>\w+)\s*:\s+\k<classname>T<\k<classname>>[^ ]*?( *)[^ ]*?\{(?>\{(?<c>)|[^{}]+|\}(?<-c>))*(?(c)(?!)))\}", "`$1$([Environment]::NewLine)`$2private:$([Environment]::NewLine)`$2    winrt::Microsoft::UI::Xaml::Window m_window{ nullptr };$([Environment]::NewLine)`$2}"
+            }
+            else # C++/CX
+            {
+                $fileContents = $fileContents -ireplace "(ref.*class[^{]*?( *)\{(?>\{(?<c>)|[^{}]+|\}(?<-c>))*(?(c)(?!)))\}", "`$1$([Environment]::NewLine)`$2private:$([Environment]::NewLine)`$2    winrt::Microsoft::UI::Xaml::Window m_window{ nullptr };$([Environment]::NewLine)`$2}"
+            }
+        }
+        else
+        {
+            $isWinRT = $fileContents -ilike "*winrt*"
+            
+            # Add the window assignment and activation.
+            if ($isWinRT)
+            {
+                $windowCreationRegex = "`$2    m_window = winrt::Microsoft::UI::Xaml::Window();$([System.Environment]::NewLine)`$2    m_window.Activate();$([System.Environment]::NewLine)"
+            }
+            else # C++/CX
+            {
+                $windowCreationRegex = "`$2    m_window = ref new Microsoft::UI::Xaml::Window();$([System.Environment]::NewLine)`$2    m_window->Activate();$([System.Environment]::NewLine)"
+            }
+
+            # This complex regex matches comments prior to the methods, plus anything in the braces after the method names.
+            $fileContents = $fileContents -replace "\s*(?:\/\/.*?\s*)*.*void.*?SuspendingEventArgs[^\{]*\{(?>\{(?<c>)|[^{}]+|\}(?<-c>))*(?(c)(?!))\}", ""
+            $fileContents = $fileContents -replace "\s*(?:\/\/.*?\s*)*.*void.*?NavigationFailedEventArgs[^\{]*\{(?>\{(?<c>)|[^{}]+|\}(?<-c>))*(?(c)(?!))\}", ""
+            $fileContents = $fileContents -replace "(\s*(?:\/\/.*?\s*)*.*void.*?::OnLaunched[^\{]*?( *))\{(?>\{(?<c>)|[^{}]+|\}(?<-c>))*(?(c)(?!))\}", "`$1`$2{$([System.Environment]::NewLine)$windowCreationRegex`$2}"
+        }
+
+        $fileContents = $fileContents -replace "\s*(?:this\.)?Suspending\s*\+=\s*[^;]*;"
+
+        if ($file.Extension -eq ".cpp")
+        {
+            $fileContents = $fileContents -replace "\s*Suspending\(.*\)\s*;"
+        }
+    }
+
+    if ($fileContents -ne $originalFileContents)
+    {
+        [System.IO.File]::WriteAllText($file.FullName, $fileContents, [System.Text.Encoding]::UTF8)
+    }
 }
 
 # Nuget restore the solution files - they need the build tools NuGet for Visual Studio to properly be able to build and deploy them.
