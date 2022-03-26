@@ -23,10 +23,27 @@ if ($ProjectRoot -ine $ConvertedProjectRoot)
 
 Write-Host "Updating solution files to support WinAppSDK..."
 
-foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.sln")))
+function Get-RelativePath([string]$Path, [string]$RelativeTo)
 {
-    [System.IO.FileSystemInfo]$file = $file
-    [string]$fileContents = [System.IO.File]::ReadAllText($file.FullName)
+    try
+    {
+        Push-Location $RelativeTo
+        $relativePath = Resolve-path -Relative $Path
+    }
+    finally
+    {
+        Pop-Location
+    }
+
+    return $relativePath
+}
+
+[System.Collections.Generic.Dictionary[string, string]]$projectToPackagesDirectoryDictionary = @{}
+
+foreach ($solutionFile in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.sln")))
+{
+    [System.IO.FileSystemInfo]$solutionFile = $solutionFile
+    [string]$fileContents = [System.IO.File]::ReadAllText($solutionFile.FullName)
     $originalFileContents = $fileContents
     
     $fileContents = $fileContents -ireplace "\{[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}\.\w+\|ARM\.\w+(?:\.\w+)?\s*=\s*\w+\|ARM[\s\n\r]*", ""
@@ -35,11 +52,115 @@ foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "
     
     if ($fileContents -ne $originalFileContents)
     {
-        [System.IO.File]::WriteAllText($file.FullName, $fileContents, [System.Text.Encoding]::UTF8)
+        [System.IO.File]::WriteAllText($solutionFile.FullName, $fileContents, [System.Text.Encoding]::UTF8)
+    }
+
+    # Any projects in this solution file will have their packages directory be in the folder containing this solution file.
+    $solutionDirectory = [System.IO.Path]::GetDirectoryName($solutionFile.FullName)
+    $packagesDirectory = [System.IO.Path]::Combine($solutionDirectory, "packages")
+
+    if (-not [System.IO.Directory]::Exists($packagesDirectory))
+    {
+        New-Item $packagesDirectory -ItemType Directory | Out-Null
+    }
+
+    $guidRegex = "\{[0-9a-f-A-F]{8}-[0-9a-f-A-F]{4}-[0-9a-f-A-F]{4}-[0-9a-f-A-F]{4}-[0-9a-f-A-F]{12}\}"
+    foreach ($projectReferenceMatch in ([regex]"Project\(`"$guidRegex`"\)\s*=\s*`"[^`"]*?`",\s*`"([^`"]*)`",\s*`"$guidRegex`"").Matches($fileContents))
+    {
+        [System.Text.RegularExpressions.Match]$projectReferenceMatch = $projectReferenceMatch
+        $projectPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($solutionDirectory, $projectReferenceMatch.Groups[1].Value))
+
+        if ([System.IO.File]::Exists($projectPath))
+        {
+            if (-not $projectToPackagesDirectoryDictionary.ContainsKey($projectPath))
+            {
+                $projectToPackagesDirectoryDictionary.Add($projectPath, (Get-RelativePath $packagesDirectory ([System.IO.Path]::GetDirectoryName($projectPath))))
+            }
+        }
     }
 }
 
-# Modify project files to support WinAppSDK instead of UWP.
+# A project file only needs updates if
+#   a) it contains references to Microsoft.UI.Xaml or Microsoft.Toolkit.Win32.UI.XamlApplication; or
+#   b) it contains references to source files that contain references to Windows.UI.Xaml.
+# If either of these are true, we'll add the project to the list of project files needing updates
+# and add its source files to the list of source files to be updated.
+
+[System.Collections.Generic.List[string]]$projectFilesNeedingUpdates = @()
+[System.Collections.Generic.List[string]]$sourceFilesNeedingUpdates = @()
+[System.Collections.Generic.List[string]]$xamlFilesNeedingUpdates = @()
+
+foreach ($projectFile in $projectToPackagesDirectoryDictionary.Keys)
+{
+    [System.Xml.XmlDocument]$fileAsXml = [xml]([System.IO.File]::ReadAllText($projectFile))
+    $namespaceManager = [System.Xml.XmlNamespaceManager]::new($fileAsXml.NameTable)
+    $namespaceManager.AddNamespace("x", $fileAsXml.Project.NamespaceURI)
+
+    $microsoftUiXamlImports = $fileAsXml.DocumentElement.SelectNodes("//x:Import[contains(@Project, 'Microsoft.UI.Xaml')]", $namespaceManager)
+    $xamlApplicationImports = $fileAsXml.DocumentElement.SelectNodes("//x:Import[contains(@Project, 'Microsoft.Toolkit.Win32.UI.XamlApplication')]", $namespaceManager)
+    $clIncludes = $fileAsXml.DocumentElement.SelectNodes("//x:ItemGroup/x:ClInclude", $namespaceManager)
+    $clCompiles = $fileAsXml.DocumentElement.SelectNodes("//x:ItemGroup/x:ClCompile", $namespaceManager)
+    $midls = $fileAsXml.DocumentElement.SelectNodes("//x:ItemGroup/x:Midl", $namespaceManager)
+    $compiles = $fileAsXml.DocumentElement.SelectNodes("//x:ItemGroup/x:Compile", $namespaceManager)
+
+    $projectFileNeedsUpdates = $false
+
+    [System.Collections.Generic.List[string]]$sourceFiles = @()
+
+    foreach ($sourceFile in $clIncludes + $clCompiles + $midls + $compiles)
+    {
+        $sourceFilePath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($projectFile), $sourceFile.Include))
+
+        if ([System.IO.File]::Exists($sourceFilePath))
+        {
+            $sourceFiles.Add($sourceFilePath)
+        }
+    }
+
+    if ($microsoftUiXamlImports.Count -gt 0 -or $xamlApplicationImports.Count -gt 0)
+    {
+        $projectFileNeedsUpdates = $true
+    }
+    else
+    {
+        foreach ($sourceFile in $sourceFiles)
+        {
+            [string]$sourceFileContents = [System.IO.File]::ReadAllText($sourceFile)
+
+            if ($sourceFileContents.Contains("Windows.UI.Xaml") -or $sourceFileContents.Contains("Windows::UI::Xaml"))
+            {
+                $projectFileNeedsUpdates = $true
+                break
+            }
+        }
+    }
+
+    if ($projectFileNeedsUpdates)
+    {
+        $projectFilesNeedingUpdates.Add($projectFile)
+
+        foreach ($sourceFile in $sourceFiles)
+        {
+            if (-not $sourceFilesNeedingUpdates.Contains($sourceFile))
+            {
+                $sourceFilesNeedingUpdates.Add($sourceFile)
+            }
+        }
+
+        $pages = $fileAsXml.DocumentElement.SelectNodes("//x:ItemGroup/x:Page", $namespaceManager)
+        $applicationDefinitions = $fileAsXml.DocumentElement.SelectNodes("//x:ItemGroup/x:ApplicationDefinition", $namespaceManager)
+
+        foreach ($xamlFile in $pages + $applicationDefinitions)
+        {
+            $xamlFilePath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($projectFile), $xamlFile.Include))
+
+            if ([System.IO.File]::Exists($xamlFilePath))
+            {
+                $xamlFilesNeedingUpdates.Add($xamlFilePath)
+            }
+        }
+    }
+}
 
 . ".\XmlHelperFunctions.ps1"
 
@@ -48,10 +169,11 @@ foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "
 
 Write-Host "Updating project files to support WinAppSDK..."
 
-foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.vcxproj")))
+foreach ($file in $projectFilesNeedingUpdates)
 {
-    [System.IO.FileSystemInfo]$file = $file
-    [string]$fileContents = [System.IO.File]::ReadAllText($file.FullName)
+    Write-Host "    Updating $file..."
+
+    [string]$fileContents = [System.IO.File]::ReadAllText($file)
 
     [System.Xml.XmlDocument]$fileAsXml = [xml]($fileContents.Replace("ARM64", "arm64"))
     $namespaceManager = [System.Xml.XmlNamespaceManager]::new($fileAsXml.NameTable)
@@ -96,7 +218,7 @@ foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "
 
         # Save off this AppX manifest for more thorough updating later as well.
         $appxManifestsNeedingUpdate.Add([pscustomobject]@{
-            Path = [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($file.FullName), $appxManifestElement.GetAttribute("Include"));
+            Path = [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($file), $appxManifestElement.GetAttribute("Include"));
             Version = $windowsTargetPlatformVersion;
             MinVersion = $windowsTargetPlatformMinVersion
         })
@@ -111,22 +233,31 @@ foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "
 
     # Add additional NuGet includes before and after the CppWinRT props/targets files and remove Microsoft.UI.Xaml targets files.
 
+    $packagesPath = $projectToPackagesDirectoryDictionary[$file]
+
+    if (-not $packagesPath)
+    {
+        $packagesPath = "packages"
+    }
+
     $cppWinRTPropsFilename = "Microsoft.Windows.CppWinRT.props"
     
-    CreateNugetImport $fileAsXml $namespaceManager "packages\Microsoft.Windows.SDK.BuildTools.10.0.22000.194\build\Microsoft.Windows.SDK.BuildTools.props" $cppWinRTPropsFilename
-    CreateNugetImport $fileAsXml $namespaceManager "packages\Microsoft.WindowsAppSDK.1.0.0\build\native\Microsoft.WindowsAppSDK.props" $cppWinRTPropsFilename
+    CreateNugetImport $fileAsXml $namespaceManager "$packagesPath\Microsoft.Windows.SDK.BuildTools.10.0.22000.194\build\Microsoft.Windows.SDK.BuildTools.props" $cppWinRTPropsFilename
+    CreateNugetImport $fileAsXml $namespaceManager "$packagesPath\Microsoft.WindowsAppSDK.1.1.0-20220302.0-CI-experimental\build\native\Microsoft.WindowsAppSDK.props" $cppWinRTPropsFilename
 
     $cppWinRTTargetsFilename = "Microsoft.Windows.CppWinRT.targets"
 
-    CreateNugetImport $fileAsXml $namespaceManager "packages\Microsoft.Windows.ImplementationLibrary.1.0.211019.2\build\native\Microsoft.Windows.ImplementationLibrary.targets" $cppWinRTTargetsFilename
-    CreateNugetImport $fileAsXml $namespaceManager "packages\Microsoft.WindowsAppSDK.1.0.0\build\native\Microsoft.WindowsAppSDK.targets" $cppWinRTTargetsFilename
-    CreateNugetImport $fileAsXml $namespaceManager "packages\Microsoft.Windows.SDK.BuildTools.10.0.22000.194\build\Microsoft.Windows.SDK.BuildTools.targets" $cppWinRTTargetsFilename
+    CreateNugetImport $fileAsXml $namespaceManager "$packagesPath\Microsoft.Windows.ImplementationLibrary.1.0.211019.2\build\native\Microsoft.Windows.ImplementationLibrary.targets" $cppWinRTTargetsFilename
+    CreateNugetImport $fileAsXml $namespaceManager "$packagesPath\Microsoft.WindowsAppSDK.1.1.0-20220302.0-CI-experimental\build\native\Microsoft.WindowsAppSDK.targets" $cppWinRTTargetsFilename
+    CreateNugetImport $fileAsXml $namespaceManager "$packagesPath\Microsoft.Windows.SDK.BuildTools.10.0.22000.194\build\Microsoft.Windows.SDK.BuildTools.targets" $cppWinRTTargetsFilename
 
+    RemoveNugetImport $fileAsXml $namespaceManager "Microsoft.Toolkit.Win32.UI.XamlApplication.props"
+    RemoveNugetImport $fileAsXml $namespaceManager "Microsoft.Toolkit.Win32.UI.XamlApplication.targets"
     RemoveNugetImport $fileAsXml $namespaceManager "Microsoft.UI.Xaml.targets"
 
     # Add this 
 
-    $packagesConfigFilesNeedingUpdate.Add([System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($file.FullName), "packages.config"))
+    $packagesConfigFilesNeedingUpdate.Add([System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($file), "packages.config"))
 
     # Add
     #   <AppxPackage>true</AppxPackage>
@@ -134,10 +265,20 @@ foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "
     #   <TargetName>$(RootNamespace)</TargetName>
     #   <UseWinUI>true</UseWinUI>
     
-    CreateOrUpdateProperty $fileAsXml $namespaceManager "AppxPackage" "true"
     CreateOrUpdateProperty $fileAsXml $namespaceManager "EnablePreviewMsixTooling" "true"
     CreateOrUpdateProperty $fileAsXml $namespaceManager "TargetName" "`$(RootNamespace)"
     CreateOrUpdateProperty $fileAsXml $namespaceManager "UseWinUI" "true"
+
+    # Add
+    #   <AppxPackage>true</AppxPackage>
+    # if this project has an AppX manifest.
+
+    $appxManifestPath = [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($file), "Package.appxmanifest")
+
+    if ([System.IO.File]::Exists($appxManifestPath))
+    {
+        CreateOrUpdateProperty $fileAsXml $namespaceManager "AppxPackage" "true"
+    }
 
     # Add
     #   <DesktopCompatible>true</DesktopCompatible>
@@ -203,7 +344,7 @@ foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "
 
     # Add the app.manifest file.
 
-    $appManifestPath = [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($file.FullName), "app.manifest")
+    $appManifestPath = [System.IO.Path]::Combine([System.IO.Path]::GetDirectoryName($file), "app.manifest")
 
     if (-not [System.IO.File]::Exists($appManifestPath))
     {
@@ -242,7 +383,7 @@ foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "
     
     CreateItem $fileAsXml $namespaceManager "ProjectCapability" "Msix" "'`$(DisableMsixProjectCapabilityAddedByProject)'!='true' and '`$(EnablePreviewMsixTooling)'=='true'"
 
-    $fileAsXml.Save($file.FullName)
+    $fileAsXml.Save($file)
 }
 
 # Modify AppX manifest files to match the WinAppSDK expectations.
@@ -251,6 +392,8 @@ Write-Host "Updating AppX manifest files to support WinAppSDK..."
 
 foreach ($appxManifest in $appxManifestsNeedingUpdate)
 {
+    Write-Host "    Updating $appxManifest"
+
     [System.Xml.XmlDocument]$appxManifestAsXml = [xml]([System.IO.File]::ReadAllText($appxManifest.Path))
     $namespaceManager = [System.Xml.XmlNamespaceManager]::new($appxManifestAsXml.NameTable)
     $namespaceManager.AddNamespace("x", $appxManifestAsXml.Package.NamespaceURI)
@@ -313,6 +456,8 @@ Write-Host "Updating packages.config files to support WinAppSDK..."
 
 foreach ($packagesConfigFile in $packagesConfigFilesNeedingUpdate)
 {
+    Write-Host "    Updating $packagesConfigFile..."
+
     # If the file doesn't exist at all, create it.
     if (-not [System.IO.File]::Exists($packagesConfigFile))
     {
@@ -321,7 +466,7 @@ foreach ($packagesConfigFile in $packagesConfigFilesNeedingUpdate)
 <packages>
   <package id="Microsoft.Windows.ImplementationLibrary" version="1.0.211019.2" targetFramework="native" />
   <package id="Microsoft.Windows.SDK.BuildTools" version="10.0.22000.194" targetFramework="native" />
-  <package id="Microsoft.WindowsAppSDK" version="1.0.0" targetFramework="native" />
+  <package id="Microsoft.WindowsAppSDK" version="1.1.0-20220302.0-CI-experimental" targetFramework="native" />
 </packages> 
 "@
 
@@ -365,7 +510,7 @@ foreach ($packagesConfigFile in $packagesConfigFilesNeedingUpdate)
             $packagesConfigXml.DocumentElement.AppendChild($winAppSdkPackage) | Out-Null
         }
 
-        $winAppSdkPackage.SetAttribute("version", "1.0.0")
+        $winAppSdkPackage.SetAttribute("version", "1.1.0-20220302.0-CI-experimental")
         $winAppSdkPackage.SetAttribute("targetFramework", "native")
 
         [System.Xml.XmlElement]$muxPackage = $packagesConfigXml.DocumentElement.SelectSingleNode("//packages/package[@id='Microsoft.UI.Xaml']")
@@ -375,6 +520,13 @@ foreach ($packagesConfigFile in $packagesConfigFilesNeedingUpdate)
             $muxPackage.ParentNode.RemoveChild($muxPackage) | Out-Null
         }
 
+        [System.Xml.XmlElement]$xamlApplicationPackage = $packagesConfigXml.DocumentElement.SelectSingleNode("//packages/package[@id='Microsoft.Toolkit.Win32.UI.XamlApplication']")
+
+        if ($xamlApplicationPackage)
+        {
+            $xamlApplicationPackage.ParentNode.RemoveChild($xamlApplicationPackage) | Out-Null
+        }
+
         $packagesConfigXml.Save($packagesConfigFile)
     }
 }
@@ -382,34 +534,53 @@ foreach ($packagesConfigFile in $packagesConfigFilesNeedingUpdate)
 # Rename Windows.UI.Xaml to Microsoft.UI.Xaml, except for Windows.UI.Xaml.Interop.TypeKind and TypeName,
 # which remain in the WUX namespace tree.
 
-Write-Host "Renaming Windows.UI.Xaml to Microsoft.UI.Xaml..."
+Write-Host "Updating namespaces in source files..."
 
-foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.cpp") + (Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.h") + (Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.cs") + (Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "*.idl")))
+foreach ($sourceFile in $sourceFilesNeedingUpdates)
 {
-    [System.IO.FileSystemInfo]$file = $file
-    [string]$fileContents = [System.IO.File]::ReadAllText($file.FullName)
+    [string]$sourceFile = $sourceFile
 
-    $fileContents = $fileContents -replace "Windows.UI.Xaml", "Microsoft.UI.Xaml"
+    Write-Host "    Updating $sourceFile..."
+
+    [string]$fileExtension = [System.IO.Path]::GetExtension($sourceFile)
+    [string]$fileContents = [System.IO.File]::ReadAllText($sourceFile)
     $originalFileContents = $fileContents
-    
-    if ($file.Extension -eq ".cpp" -or $file.Extension -eq ".h")
+
+    $replacements = @(
+        @{Original = "Windows\.UI\.Xaml"; Replacement = "Microsoft.UI.Xaml"},
+        @{Original = "Windows\.UI\.Colors"; Replacement = "Microsoft.UI.Colors"},
+        @{Original = "Microsoft\.Toolkit\.Win32\.UI\.XamlHost\.XamlApplication"; Replacement = "Microsoft.UI.Xaml.Application"},
+        @{Original = "Microsoft\.UI\.Xaml\.Interop\.TypeKind"; Replacement = "Windows.UI.Xaml.Interop.TypeKind"},
+        @{Original = "Microsoft\.UI\.Xaml\.Interop\.TypeName"; Replacement = "Windows.UI.Xaml.Interop.TypeName"},
+        @{Original = "(?:\w+\.)*LaunchActivatedEventArgs"; Replacement = "Microsoft.UI.Xaml.LaunchActivatedEventArgs"},
+        @{Original = "IDesktopWindowXamlSourceNative2"; Replacement = "IDesktopWindowXamlSourceNative"}
+    )
+
+    foreach ($replacement in $replacements)
     {
-        $fileContents = $fileContents -replace "Windows::UI::Xaml", "Microsoft::UI::Xaml"
-        $fileContents = $fileContents -replace "Microsoft::UI::Xaml::Interop::TypeKind", "Windows::UI::Xaml::Interop::TypeKind"
-        $fileContents = $fileContents -replace "Microsoft::UI::Xaml::Interop::TypeName", "Windows::UI::Xaml::Interop::TypeName"
-        $fileContents = $fileContents -replace "(?:\w+::)*LaunchActivatedEventArgs", "Microsoft::UI::Xaml::LaunchActivatedEventArgs"
+        $fileContents = $fileContents -replace $replacement.Original, $replacement.Replacement
     }
-    else
+    
+    if ($fileExtension -eq ".cpp" -or $fileExtension -eq ".h")
     {
-        $fileContents = $fileContents -replace "Microsoft.UI.Xaml.Interop.TypeKind", "Windows.UI.Xaml.Interop.TypeKind"
-        $fileContents = $fileContents -replace "Microsoft.UI.Xaml.Interop.TypeName", "Windows.UI.Xaml.Interop.TypeName"
-        $fileContents = $fileContents -replace "(?:\w+\.)*LaunchActivatedEventArgs", "Microsoft.UI.Xaml.LaunchActivatedEventArgs"
+        foreach ($replacement in $replacements)
+        {
+            $fileContents = $fileContents -replace $replacement.Original.Replace("\.", "::"), $replacement.Replacement.Replace(".", "::")
+        }
+        
+        # If Microsoft.UI.Xaml.Interop.h is being included, we may also need Windows.UI.Xaml.Interop.h.
+        $fileContents = $fileContents -replace "(#include\s+([`"|<])((?:\w+[\\\/])*)Microsoft\.UI\.Xaml\.Interop\.h([`"|>]))", "`$1$([System.Environment]::NewLine)#include $`2`$3Windows.UI.Xaml.Interop.h`$4"
+    }
+
+    if ($sourceFile.ToLower().Contains("pch.h"))
+    {
+        $fileContents = "$fileContents$([System.Environment]::NewLine)#include <wil/cppwinrt_helpers.h>"
     }
 
     # We also need to remove some APIs that don't exist in WinAppSDK.
-    if ($file.FullName.Contains("App."))
+    if ($sourceFile.Contains("App."))
     {
-        if ($file.Extension -eq ".h")
+        if ($fileExtension -eq ".h")
         {
             $fileContents = $fileContents -replace "\s*void[^;]*?SuspendingEventArgs[^;]*?;", ""
             $fileContents = $fileContents -replace "\s*void[^;]*?NavigationFailedEventArgs[^;]*?;", ""
@@ -448,7 +619,7 @@ foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "
 
         $fileContents = $fileContents -replace "\s*(?:this\.)?Suspending\s*\+=\s*[^;]*;"
 
-        if ($file.Extension -eq ".cpp")
+        if ($fileExtension -eq ".cpp")
         {
             $fileContents = $fileContents -replace "\s*Suspending\(.*\)\s*;"
         }
@@ -456,7 +627,34 @@ foreach ($file in ((Get-ChildItem $ConvertedProjectRoot -Recurse -File -Filter "
 
     if ($fileContents -ne $originalFileContents)
     {
-        [System.IO.File]::WriteAllText($file.FullName, $fileContents, [System.Text.Encoding]::UTF8)
+        [System.IO.File]::WriteAllText($sourceFile, $fileContents, [System.Text.Encoding]::UTF8)
+    }
+}
+
+Write-Host "Updating namespaces in XAML files..."
+
+foreach ($xamlFile in $xamlFilesNeedingUpdates)
+{
+    Write-Host "    Updating $xamlFile..."
+
+    [string]$fileContents = [System.IO.File]::ReadAllText($xamlFile)
+    $originalFileContents = $fileContents
+
+    # Remove references to the toolkit.
+    foreach ($toolkitMatch in ([regex]"\s*xmlns:(\w+)\s*=\s*`"using:Microsoft.Toolkit.Win32.UI.XamlHost`"").Matches($fileContents))
+    {
+        [System.Text.RegularExpressions.Match]$toolkitMatch = $toolkitMatch
+        $toolkitNamespace = $toolkitMatch.Groups[1].Value
+        $fileContents = $fileContents -replace $toolkitMatch.Value, ""
+        $fileContents = $fileContents -replace "$toolkitNamespace\s*:\s*XamlApplication", "Application"
+    }
+
+    $fileContents = $fileContents -replace "(<(?:\w+:)?XamlControlsResources[^>]*?)\s*ControlsResourcesVersion\s*=\s*`"\w+`"([^>]*>)", "`$1`$2"
+    $fileContents = $fileContents -replace "(<(?:\w+:)?ColorPicker[^>]*?)\s*Orientation\s*=\s*`"\w+`"([^>]*>)", "`$1`$2"
+
+    if ($fileContents -ne $originalFileContents)
+    {
+        [System.IO.File]::WriteAllText($xamlFile, $fileContents, [System.Text.Encoding]::UTF8)
     }
 }
 
